@@ -2,10 +2,10 @@ import streamlit as st
 import os
 from openai import OpenAI
 
-st.set_page_config(page_title="Project W – MVP Demo", layout="centered")
+st.set_page_config(page_title="Project W - MVP Demo", layout="centered")
 
-st.title("Project W – MVP Demo")
-st.write("Upload documents and check whether a client comment was applied.")
+st.title("Project W - MVP Demo")
+st.write("AI-powered comment verification prototype.")
 
 st.divider()
 
@@ -17,52 +17,73 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-# --- User inputs ---
+# --- Inputs ---
 comment = st.text_area(
-    "Client comment",
+    "Client Comment",
     placeholder="e.g. Correct 'Committe’s' to 'Committee’s'.",
-    height=100
+    height=80
 )
 
-before_pdf = st.file_uploader(
-    "Comments PDF (before)",
-    type=["pdf"]
+before_text = st.text_area(
+    "Before Text (simulate page content before amendment)",
+    height=150
 )
 
-after_pdf = st.file_uploader(
-    "Amended PDF (after)",
-    type=["pdf"]
+after_text = st.text_area(
+    "After Text (simulate page content after amendment)",
+    height=150
 )
 
 st.divider()
 
-# --- Action button ---
-if st.button("Check change"):
-    if not comment:
-        st.warning("Please enter a client comment.")
-    elif not before_pdf or not after_pdf:
-        st.warning("Please upload both PDFs.")
+if st.button("Check Change"):
+
+    if not comment or not before_text or not after_text:
+        st.warning("Please fill in all fields.")
     else:
-        with st.spinner("Asking AI..."):
+        with st.spinner("Analyzing with AI..."):
+
             response = client.chat.completions.create(
                 model="gpt-4.1-mini",
+                temperature=0,
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are an assistant helping to analyse document review comments. "
-                            "For now, simply restate the user's comment and confirm you received it."
-                        ),
+                        "content": """
+You are an expert document reviewer.
+
+Your task is to determine whether a client comment has been applied in the amended text.
+
+Respond ONLY in valid JSON with this format:
+
+{
+  "status": "Applied | Missed | Unclear",
+  "explanation": "Short explanation of reasoning.",
+  "confidence": "High | Medium | Low"
+}
+
+Rules:
+- "Applied" = The requested change clearly appears in the after text.
+- "Missed" = The requested change clearly does NOT appear.
+- "Unclear" = Cannot confidently determine.
+"""
                     },
                     {
                         "role": "user",
-                        "content": f"The client comment is: {comment}",
-                    },
-                ],
-                temperature=0.0,
+                        "content": f"""
+Client comment:
+{comment}
+
+Before text:
+{before_text}
+
+After text:
+{after_text}
+"""
+                    }
+                ]
             )
 
-        st.success("AI responded successfully.")
-        st.subheader("AI response (test)")
-        st.write(response.choices[0].message.content)
-
+        st.success("Analysis complete.")
+        st.subheader("AI Result")
+        st.code(response.choices[0].message.content, language="json")
