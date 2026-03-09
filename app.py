@@ -1,3 +1,4 @@
+from pypdf import PdfReader
 import streamlit as st
 import os
 from openai import OpenAI
@@ -24,25 +25,28 @@ comment = st.text_area(
     height=80
 )
 
-before_text = st.text_area(
-    "Before Text (simulate page content before amendment)",
-    height=150
-)
-
-after_text = st.text_area(
-    "After Text (simulate page content after amendment)",
-    height=150
-)
+before_pdf = st.file_uploader("Comments PDF (before)", type="pdf")
+after_pdf = st.file_uploader("Amended PDF (after)", type="pdf")
 
 st.divider()
 
 if st.button("Check Change"):
 
-    if not comment or not before_text or not after_text:
+    if not comment or not before_pdf or not after_pdf:
         st.warning("Please fill in all fields.")
     else:
         with st.spinner("Analyzing with AI..."):
+            before_reader = PdfReader(before_pdf)
+            after_reader = PdfReader(after_pdf)
 
+            before_text = ""
+            for page in before_reader.pages:
+                before_text += page.extract_text() or ""
+
+            after_text = ""
+            for page in after_reader.pages:
+                after_text += page.extract_text() or ""
+            
             response = client.chat.completions.create(
                 model="gpt-4.1-mini",
                 temperature=0,
