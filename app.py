@@ -41,7 +41,7 @@ def normalize_text(text):
     - lowercase
     - convert curly apostrophes / quotes
     - remove extra spaces
-    - remove most punctuation except apostrophes and quotes
+    - remove most punctuation except apostrophes, quotes, ampersand, hyphen
     """
     text = text.lower()
     text = text.replace("’", "'").replace("‘", "'")
@@ -52,38 +52,79 @@ def normalize_text(text):
 
 
 def extract_keywords(comment):
+    """
+    Extract context-aware keywords from the client comment.
+
+    Strategy:
+    - normalize text
+    - keep quoted phrases as high-value terms
+    - split into words
+    - remove common stop words
+    - preserve meaningful context words
+    """
     stop_words = {
         "the", "and", "for", "that", "this", "with", "from", "into", "have",
         "has", "had", "was", "were", "are", "is", "be", "been", "being",
         "to", "of", "in", "on", "at", "by", "or", "as", "an", "a",
         "correct", "change", "replace", "revise", "amend", "update",
-        "please", "kindly", "should", "make", "it", "its", "it's"
+        "please", "kindly", "should", "make", "it", "its", "it's",
+        "word", "words", "text", "phrase", "heading", "title", "line",
+        "page", "para", "paragraph", "section"
     }
 
     normalized_comment = normalize_text(comment)
-    words = re.findall(r"\b[\w']+\b", normalized_comment)
+
+    # Extract quoted phrases first
+    quoted_phrases = re.findall(r'"([^"]+)"', normalized_comment)
+
+    # Extract individual words
+    words = re.findall(r"\b[\w'&-]+\b", normalized_comment)
 
     keywords = []
+
+    # Add quoted phrases as full phrases if meaningful
+    for phrase in quoted_phrases:
+        phrase = phrase.strip()
+        if len(phrase) >= 3:
+            keywords.append(phrase)
+
+    # Add words
     for word in words:
         if len(word) >= 3 and word not in stop_words:
             keywords.append(word)
 
+    # Preserve order, remove duplicates
     unique_keywords = []
     seen = set()
-    for word in keywords:
-        if word not in seen:
-            seen.add(word)
-            unique_keywords.append(word)
+    for keyword in keywords:
+        if keyword not in seen:
+            seen.add(keyword)
+            unique_keywords.append(keyword)
 
     return unique_keywords
 
 
 def score_page(page_text, keywords):
+    """
+    Score a page based on keyword matches.
+    Longer keywords/phrases get more weight.
+    """
     normalized_page = normalize_text(page_text)
     score = 0
 
     for keyword in keywords:
-        score += normalized_page.count(keyword)
+        occurrences = normalized_page.count(keyword)
+
+        if " " in keyword:
+            # Phrase match gets higher weight
+            score += occurrences * 5
+        elif len(keyword) >= 8:
+            # Longer words get moderate boost
+            score += occurrences * 3
+        elif len(keyword) >= 5:
+            score += occurrences * 2
+        else:
+            score += occurrences
 
     return score
 
@@ -121,8 +162,8 @@ def combine_selected_pages(pages):
 # --- Inputs ---
 comment = st.text_area(
     "Client Comment",
-    placeholder="e.g. Correct 'Committe’s' to 'Committee’s'.",
-    height=80
+    placeholder='e.g. In the heading "Audit and Risk Management Committe’s Statement", correct "Committe’s" to "Committee’s".',
+    height=100
 )
 
 before_pdf = st.file_uploader("Comments PDF (before)", type="pdf")
