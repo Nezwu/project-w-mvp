@@ -22,16 +22,6 @@ client = OpenAI(api_key=api_key)
 
 # --- Helper functions ---
 def extract_pages(pdf_file):
-    """
-    Extract text from a PDF page by page.
-
-    Returns:
-        list[dict]: [
-            {"page_number": 1, "text": "..."},
-            {"page_number": 2, "text": "..."},
-            ...
-        ]
-    """
     reader = PdfReader(pdf_file)
     pages = []
 
@@ -46,17 +36,29 @@ def extract_pages(pdf_file):
 
 
 def normalize_text(text):
-    """Lowercase and remove extra spaces for simpler matching."""
+    """
+    Normalize text for matching:
+    - lowercase
+    - convert curly quotes/apostrophes to straight ones
+    - remove extra spaces
+    - remove most punctuation except apostrophes
+    """
     text = text.lower()
+
+    # Normalize curly apostrophes / quotes
+    text = text.replace("’", "'").replace("‘", "'")
+    text = text.replace("“", '"').replace("”", '"')
+
+    # Remove punctuation except apostrophes and quotes
+    text = re.sub(r"[^a-z0-9\s'\"&-]", " ", text)
+
+    # Collapse whitespace
     text = re.sub(r"\s+", " ", text)
+
     return text.strip()
 
 
 def extract_keywords(comment):
-    """
-    Convert the client comment into a simple keyword list.
-    Removes very short/common words to reduce noise.
-    """
     stop_words = {
         "the", "and", "for", "that", "this", "with", "from", "into", "have",
         "has", "had", "was", "were", "are", "is", "be", "been", "being",
@@ -65,14 +67,14 @@ def extract_keywords(comment):
         "please", "kindly", "should", "make", "it", "its", "it's"
     }
 
-    words = re.findall(r"\b[\w’']+\b", comment.lower())
+    normalized_comment = normalize_text(comment)
+    words = re.findall(r"\b[\w']+\b", normalized_comment)
 
     keywords = []
     for word in words:
         if len(word) >= 3 and word not in stop_words:
             keywords.append(word)
 
-    # Preserve order, remove duplicates
     unique_keywords = []
     seen = set()
     for word in keywords:
@@ -84,23 +86,16 @@ def extract_keywords(comment):
 
 
 def score_page(page_text, keywords):
-    """
-    Score a page by counting keyword occurrences.
-    """
     normalized_page = normalize_text(page_text)
     score = 0
 
     for keyword in keywords:
-        score += normalized_page.count(keyword.lower())
+        score += normalized_page.count(keyword)
 
     return score
 
 
 def find_candidate_pages(pages, keywords, top_n=3):
-    """
-    Rank pages by keyword match score and return top pages.
-    Excludes pages with score 0.
-    """
     scored_pages = []
 
     for page in pages:
@@ -112,16 +107,12 @@ def find_candidate_pages(pages, keywords, top_n=3):
         })
 
     scored_pages.sort(key=lambda x: x["score"], reverse=True)
-
     top_pages = [page for page in scored_pages if page["score"] > 0][:top_n]
 
     return top_pages
 
 
 def combine_selected_pages(pages):
-    """
-    Combine selected page content into one string for the AI prompt.
-    """
     if not pages:
         return "[No relevant pages found by keyword filter]"
 
@@ -165,7 +156,6 @@ if st.button("Check Change"):
 
         st.success("PDF extraction and page filtering complete.")
 
-        # --- Debug section ---
         st.subheader("Filtering Summary")
         st.write(f"Before PDF pages: {len(before_pages)}")
         st.write(f"After PDF pages: {len(after_pages)}")
