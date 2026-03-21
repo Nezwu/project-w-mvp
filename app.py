@@ -11,6 +11,11 @@ st.write("AI-powered comment verification prototype.")
 
 st.divider()
 
+# --- Configuration ---
+SMALL_DOC_PAGE_THRESHOLD = 5
+MAX_FALLBACK_PAGES = 5
+TOP_CANDIDATE_PAGES = 3
+
 # --- OpenAI client ---
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -54,13 +59,6 @@ def normalize_text(text):
 def extract_keywords(comment):
     """
     Extract context-aware keywords from the client comment.
-
-    Strategy:
-    - normalize text
-    - keep quoted phrases as high-value terms
-    - split into words
-    - remove common stop words
-    - preserve meaningful context words
     """
     stop_words = {
         "the", "and", "for", "that", "this", "with", "from", "into", "have",
@@ -74,26 +72,20 @@ def extract_keywords(comment):
 
     normalized_comment = normalize_text(comment)
 
-    # Extract quoted phrases first
     quoted_phrases = re.findall(r'"([^"]+)"', normalized_comment)
-
-    # Extract individual words
     words = re.findall(r"\b[\w'&-]+\b", normalized_comment)
 
     keywords = []
 
-    # Add quoted phrases as full phrases if meaningful
     for phrase in quoted_phrases:
         phrase = phrase.strip()
         if len(phrase) >= 3:
             keywords.append(phrase)
 
-    # Add words
     for word in words:
         if len(word) >= 3 and word not in stop_words:
             keywords.append(word)
 
-    # Preserve order, remove duplicates
     unique_keywords = []
     seen = set()
     for keyword in keywords:
@@ -116,10 +108,8 @@ def score_page(page_text, keywords):
         occurrences = normalized_page.count(keyword)
 
         if " " in keyword:
-            # Phrase match gets higher weight
             score += occurrences * 5
         elif len(keyword) >= 8:
-            # Longer words get moderate boost
             score += occurrences * 3
         elif len(keyword) >= 5:
             score += occurrences * 2
@@ -129,7 +119,7 @@ def score_page(page_text, keywords):
     return score
 
 
-def find_candidate_pages(pages, keywords, top_n=3):
+def find_candidate_pages(pages, keywords, top_n=TOP_CANDIDATE_PAGES):
     scored_pages = []
 
     for page in pages:
@@ -144,6 +134,31 @@ def find_candidate_pages(pages, keywords, top_n=3):
     top_pages = [page for page in scored_pages if page["score"] > 0][:top_n]
 
     return top_pages
+
+
+def build_fallback_pages(pages, max_pages=MAX_FALLBACK_PAGES):
+    """
+    Build fallback pages safely.
+    - For small documents, use all pages.
+    - For larger documents, cap the number of pages sent to AI.
+    """
+    if len(pages) <= SMALL_DOC_PAGE_THRESHOLD:
+        fallback_source = pages
+        fallback_mode = f"all pages used (small document: {len(pages)} pages)"
+    else:
+        fallback_source = pages[:max_pages]
+        fallback_mode = f"first {len(fallback_source)} pages used (large document fallback capped)"
+
+    fallback_pages = [
+        {
+            "page_number": page["page_number"],
+            "text": page["text"],
+            "score": 0
+        }
+        for page in fallback_source
+    ]
+
+    return fallback_pages, fallback_mode
 
 
 def combine_selected_pages(pages):
@@ -182,29 +197,21 @@ if st.button("Check Change"):
 
         keywords = extract_keywords(comment)
 
-        before_candidates = find_candidate_pages(before_pages, keywords, top_n=3)
-        after_candidates = find_candidate_pages(after_pages, keywords, top_n=3)
+        before_candidates = find_candidate_pages(before_pages, keywords, top_n=TOP_CANDIDATE_PAGES)
+        after_candidates = find_candidate_pages(after_pages, keywords, top_n=TOP_CANDIDATE_PAGES)
 
-        # Fallback: if no candidate pages are found, use all pages
+        before_fallback_used = False
+        after_fallback_used = False
+        before_fallback_mode = ""
+        after_fallback_mode = ""
+
         if not before_candidates:
-            before_candidates = [
-                {
-                    "page_number": page["page_number"],
-                    "text": page["text"],
-                    "score": 0
-                }
-                for page in before_pages
-            ]
+            before_candidates, before_fallback_mode = build_fallback_pages(before_pages)
+            before_fallback_used = True
 
         if not after_candidates:
-            after_candidates = [
-                {
-                    "page_number": page["page_number"],
-                    "text": page["text"],
-                    "score": 0
-                }
-                for page in after_pages
-            ]
+            after_candidates, after_fallback_mode = build_fallback_pages(after_pages)
+            after_fallback_used = True
 
         before_text = combine_selected_pages(before_candidates)
         after_text = combine_selected_pages(after_candidates)
@@ -215,6 +222,18 @@ if st.button("Check Change"):
         st.write(f"Before PDF pages: {len(before_pages)}")
         st.write(f"After PDF pages: {len(after_pages)}")
         st.write(f"Extracted keywords: {keywords if keywords else '[None]'}")
+        st.write(f"Top candidate page limit: {TOP_CANDIDATE_PAGES}")
+        st.write(f"Fallback page cap for large documents: {MAX_FALLBACK_PAGES}")
+
+        if before_fallback_used:
+            st.write(f"Before PDF fallback used: Yes — {before_fallback_mode}")
+        else:
+            st.write("Before PDF fallback used: No")
+
+        if after_fallback_used:
+            st.write(f"After PDF fallback used: Yes — {after_fallback_mode}")
+        else:
+            st.write("After PDF fallback used: No")
 
         with st.expander("Selected candidate pages - Before PDF"):
             if before_candidates:
