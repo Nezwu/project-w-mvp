@@ -1,6 +1,7 @@
 from pypdf import PdfReader
 import streamlit as st
 import os
+import re
 from openai import OpenAI
 
 st.set_page_config(page_title="Project W - MVP Demo", layout="centered")
@@ -13,7 +14,7 @@ st.divider()
 # --- OpenAI client ---
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    st.error("OpenAI API key not found. Please set it in Streamlit secrets.")
+    st.error("OpenAI API key not found. Please set OPENAI_API_KEY in the environment.")
     st.stop()
 
 client = OpenAI(api_key=api_key)
@@ -44,17 +45,90 @@ def extract_pages(pdf_file):
     return pages
 
 
-def combine_pages_to_text(pages):
+def normalize_text(text):
+    """Lowercase and remove extra spaces for simpler matching."""
+    text = text.lower()
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def extract_keywords(comment):
     """
-    Combine page-level text back into one large string.
-    This keeps your current AI workflow working for now,
-    while also letting us inspect pages individually.
+    Convert the client comment into a simple keyword list.
+    Removes very short/common words to reduce noise.
     """
-    combined_text = []
+    stop_words = {
+        "the", "and", "for", "that", "this", "with", "from", "into", "have",
+        "has", "had", "was", "were", "are", "is", "be", "been", "being",
+        "to", "of", "in", "on", "at", "by", "or", "as", "an", "a",
+        "correct", "change", "replace", "revise", "amend", "update",
+        "please", "kindly", "should", "make", "it", "its", "it's"
+    }
+
+    words = re.findall(r"\b[\w’']+\b", comment.lower())
+
+    keywords = []
+    for word in words:
+        if len(word) >= 3 and word not in stop_words:
+            keywords.append(word)
+
+    # Preserve order, remove duplicates
+    unique_keywords = []
+    seen = set()
+    for word in keywords:
+        if word not in seen:
+            seen.add(word)
+            unique_keywords.append(word)
+
+    return unique_keywords
+
+
+def score_page(page_text, keywords):
+    """
+    Score a page by counting keyword occurrences.
+    """
+    normalized_page = normalize_text(page_text)
+    score = 0
+
+    for keyword in keywords:
+        score += normalized_page.count(keyword.lower())
+
+    return score
+
+
+def find_candidate_pages(pages, keywords, top_n=3):
+    """
+    Rank pages by keyword match score and return top pages.
+    Excludes pages with score 0.
+    """
+    scored_pages = []
 
     for page in pages:
+        score = score_page(page["text"], keywords)
+        scored_pages.append({
+            "page_number": page["page_number"],
+            "text": page["text"],
+            "score": score
+        })
+
+    scored_pages.sort(key=lambda x: x["score"], reverse=True)
+
+    top_pages = [page for page in scored_pages if page["score"] > 0][:top_n]
+
+    return top_pages
+
+
+def combine_selected_pages(pages):
+    """
+    Combine selected page content into one string for the AI prompt.
+    """
+    if not pages:
+        return "[No relevant pages found by keyword filter]"
+
+    combined_text = []
+    for page in pages:
         combined_text.append(
-            f"\n--- PAGE {page['page_number']} ---\n{page['text']}"
+            f"\n--- PAGE {page['page_number']} | SCORE {page['score']} ---\n{page['text']}"
         )
 
     return "\n".join(combined_text)
@@ -81,35 +155,39 @@ if st.button("Check Change"):
             before_pages = extract_pages(before_pdf)
             after_pages = extract_pages(after_pdf)
 
-            before_text = combine_pages_to_text(before_pages)
-            after_text = combine_pages_to_text(after_pages)
+        keywords = extract_keywords(comment)
 
-        st.success("PDF extraction complete.")
+        before_candidates = find_candidate_pages(before_pages, keywords, top_n=3)
+        after_candidates = find_candidate_pages(after_pages, keywords, top_n=3)
 
-        # --- Debug / verification section ---
-        st.subheader("Extraction Summary")
+        before_text = combine_selected_pages(before_candidates)
+        after_text = combine_selected_pages(after_candidates)
+
+        st.success("PDF extraction and page filtering complete.")
+
+        # --- Debug section ---
+        st.subheader("Filtering Summary")
         st.write(f"Before PDF pages: {len(before_pages)}")
         st.write(f"After PDF pages: {len(after_pages)}")
+        st.write(f"Extracted keywords: {keywords if keywords else '[None]'}")
 
-        with st.expander("Preview extracted pages - Before PDF"):
-            preview_count = min(5, len(before_pages))
-            for page in before_pages[:preview_count]:
-                st.markdown(f"**Page {page['page_number']}**")
-                if page["text"]:
-                    st.text(page["text"][:1500])
-                else:
-                    st.text("[No text extracted]")
-                st.divider()
+        with st.expander("Selected candidate pages - Before PDF"):
+            if before_candidates:
+                for page in before_candidates:
+                    st.markdown(f"**Page {page['page_number']} | Score: {page['score']}**")
+                    st.text(page["text"][:1500] if page["text"] else "[No text extracted]")
+                    st.divider()
+            else:
+                st.write("No matching pages found.")
 
-        with st.expander("Preview extracted pages - After PDF"):
-            preview_count = min(5, len(after_pages))
-            for page in after_pages[:preview_count]:
-                st.markdown(f"**Page {page['page_number']}**")
-                if page["text"]:
-                    st.text(page["text"][:1500])
-                else:
-                    st.text("[No text extracted]")
-                st.divider()
+        with st.expander("Selected candidate pages - After PDF"):
+            if after_candidates:
+                for page in after_candidates:
+                    st.markdown(f"**Page {page['page_number']} | Score: {page['score']}**")
+                    st.text(page["text"][:1500] if page["text"] else "[No text extracted]")
+                    st.divider()
+            else:
+                st.write("No matching pages found.")
 
         with st.spinner("Analyzing with AI..."):
             response = client.chat.completions.create(
@@ -123,6 +201,11 @@ You are an expert document reviewer.
 
 Your task is to determine whether a client comment has been applied in the amended text.
 
+You will receive:
+1. A client comment
+2. Selected relevant pages from the before PDF
+3. Selected relevant pages from the after PDF
+
 Respond ONLY in valid JSON with this format:
 
 {
@@ -135,6 +218,7 @@ Rules:
 - "Applied" = The requested change clearly appears in the after text.
 - "Missed" = The requested change clearly does NOT appear.
 - "Unclear" = Cannot confidently determine.
+- If the selected pages do not provide enough evidence, return "Unclear".
 """
                     },
                     {
@@ -143,10 +227,10 @@ Rules:
 Client comment:
 {comment}
 
-Before text:
+Selected pages from Before PDF:
 {before_text}
 
-After text:
+Selected pages from After PDF:
 {after_text}
 """
                     }
