@@ -39,22 +39,15 @@ def normalize_text(text):
     """
     Normalize text for matching:
     - lowercase
-    - convert curly quotes/apostrophes to straight ones
+    - convert curly apostrophes / quotes
     - remove extra spaces
-    - remove most punctuation except apostrophes
+    - remove most punctuation except apostrophes and quotes
     """
     text = text.lower()
-
-    # Normalize curly apostrophes / quotes
     text = text.replace("’", "'").replace("‘", "'")
     text = text.replace("“", '"').replace("”", '"')
-
-    # Remove punctuation except apostrophes and quotes
     text = re.sub(r"[^a-z0-9\s'\"&-]", " ", text)
-
-    # Collapse whitespace
     text = re.sub(r"\s+", " ", text)
-
     return text.strip()
 
 
@@ -150,6 +143,27 @@ if st.button("Check Change"):
 
         before_candidates = find_candidate_pages(before_pages, keywords, top_n=3)
         after_candidates = find_candidate_pages(after_pages, keywords, top_n=3)
+
+        # Fallback: if no candidate pages are found, use all pages
+        if not before_candidates:
+            before_candidates = [
+                {
+                    "page_number": page["page_number"],
+                    "text": page["text"],
+                    "score": 0
+                }
+                for page in before_pages
+            ]
+
+        if not after_candidates:
+            after_candidates = [
+                {
+                    "page_number": page["page_number"],
+                    "text": page["text"],
+                    "score": 0
+                }
+                for page in after_pages
+            ]
 
         before_text = combine_selected_pages(before_candidates)
         after_text = combine_selected_pages(after_candidates)
